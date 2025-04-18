@@ -63,6 +63,7 @@ function processStreamingData(playerInfo) {
 async function handleRequest(request: Request): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;
+  const fullUrl = request.url;
   
   // Set CORS headers
   const headers = new Headers({
@@ -118,18 +119,20 @@ async function handleRequest(request: Request): Promise<Response> {
   // Add a direct proxy endpoint for stream URLs
   if (path.startsWith("/proxy/")) {
     try {
-      const encodedUrl = path.split("/proxy/")[1];
-      if (!encodedUrl) {
+      // Extract the full URL to proxy by removing the "/proxy/" prefix from the full request URL
+      const prefixToRemove = fullUrl.split("/proxy/")[0] + "/proxy/";
+      const streamUrl = fullUrl.substring(prefixToRemove.length);
+      
+      if (!streamUrl) {
         return new Response(
           JSON.stringify({ error: "URL parameter is required" }),
           { status: 400, headers: new Headers({ "Content-Type": "application/json" }) }
         );
       }
       
-      const decodedUrl = decodeURIComponent(encodedUrl);
-      console.log(`Proxying request to: ${decodedUrl}`);
+      console.log(`Proxying request to: ${streamUrl}`);
       
-      const proxyResponse = await fetch(decodedUrl);
+      const proxyResponse = await fetch(streamUrl);
       const proxyHeaders = new Headers(proxyResponse.headers);
       proxyHeaders.set("Access-Control-Allow-Origin", "*");
       
