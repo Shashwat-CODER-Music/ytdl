@@ -1,64 +1,8 @@
 // main.ts - Main entry point for Deno Deploy
 
 import { serve } from "https://deno.land/std@0.204.0/http/server.ts";
-import InnerTube from "npm:innertube.js";
-
-const yt = new InnerTube();
-
-// Helper function to extract and process streaming URLs
-function processStreamingData(playerInfo) {
-  const result = {
-    title: playerInfo?.videoDetails?.title || "",
-    author: playerInfo?.videoDetails?.author || "",
-    lengthSeconds: playerInfo?.videoDetails?.lengthSeconds || 0,
-    viewCount: playerInfo?.videoDetails?.viewCount || 0,
-    isLiveStream: playerInfo?.videoDetails?.isLiveContent || false,
-    thumbnails: playerInfo?.videoDetails?.thumbnail?.thumbnails || [],
-    streams: []
-  };
-
-  // Process streaming formats
-  if (playerInfo?.streamingData?.formats) {
-    result.streams.push(...playerInfo.streamingData.formats.map(format => ({
-      url: format.url || "",
-      mimeType: format.mimeType || "",
-      qualityLabel: format.qualityLabel || "",
-      bitrate: format.bitrate || 0,
-      width: format.width || 0,
-      height: format.height || 0,
-      contentLength: format.contentLength || "0",
-      fps: format.fps || 0,
-      type: "combined"
-    })));
-  }
-
-  // Process adaptive formats (separate audio and video streams)
-  if (playerInfo?.streamingData?.adaptiveFormats) {
-    result.streams.push(...playerInfo.streamingData.adaptiveFormats.map(format => ({
-      url: format.url || "",
-      mimeType: format.mimeType || "",
-      qualityLabel: format.qualityLabel || "",
-      bitrate: format.bitrate || 0,
-      width: format.width || 0,
-      height: format.height || 0,
-      contentLength: format.contentLength || "0",
-      fps: format.fps || 0,
-      type: format.mimeType?.includes("audio") ? "audio" : "video"
-    })));
-  }
-
-  // Add HLS stream if available (for live streams)
-  if (playerInfo?.streamingData?.hlsManifestUrl) {
-    result.hlsManifestUrl = playerInfo.streamingData.hlsManifestUrl;
-  }
-
-  // Add DASH manifest if available
-  if (playerInfo?.streamingData?.dashManifestUrl) {
-    result.dashManifestUrl = playerInfo.streamingData.dashManifestUrl;
-  }
-
-  return result;
-}
+// Use npm package with Deno
+import ytdl from "npm:@distube/ytdl-core@latest";
 
 async function handleRequest(request: Request): Promise<Response> {
   const url = new URL(request.url);
@@ -90,10 +34,33 @@ async function handleRequest(request: Request): Promise<Response> {
       }
       
       console.log(`Fetching data for video ID: ${videoId}`);
-      const playerInfo = await yt.player({ videoId });
       
-      // Process the streaming data
-      const processedData = processStreamingData(playerInfo);
+      // Get video info with formats using ytdl-core
+      const info = await ytdl.getInfo(videoId);
+      
+      // Process the data for the response
+      const processedData = {
+        title: info.videoDetails.title,
+        author: info.videoDetails.author.name,
+        lengthSeconds: parseInt(info.videoDetails.lengthSeconds),
+        viewCount: parseInt(info.videoDetails.viewCount),
+        isLiveStream: info.videoDetails.isLiveContent,
+        thumbnails: info.videoDetails.thumbnails,
+        formats: info.formats.map(format => ({
+          itag: format.itag,
+          url: format.url,
+          mimeType: format.mimeType,
+          qualityLabel: format.qualityLabel,
+          bitrate: format.bitrate,
+          width: format.width,
+          height: format.height,
+          contentLength: format.contentLength,
+          fps: format.fps,
+          audioQuality: format.audioQuality,
+          isAudioOnly: format.hasAudio && !format.hasVideo,
+          isVideoOnly: format.hasVideo && !format.hasAudio
+        }))
+      };
       
       return new Response(
         JSON.stringify({
@@ -115,47 +82,151 @@ async function handleRequest(request: Request): Promise<Response> {
     }
   }
   
-  // Add a direct proxy endpoint for stream URLs
-  if (path.startsWith("/proxy/")) {
+  // Handle direct streaming endpoint
+  if (path.startsWith("/stream/")) {
     try {
-      const encodedUrl = path.split("/proxy/")[1];
-      if (!encodedUrl) {
+      const videoId = path.split("/stream/")[1];
+      
+      if (!videoId) {
         return new Response(
-          JSON.stringify({ error: "URL parameter is required" }),
+          JSON.stringify({ error: "Video ID is required" }),
           { status: 400, headers: new Headers({ "Content-Type": "application/json" }) }
         );
       }
+
+      // Get format parameter (itag)
+      const formatId = url.searchParams.get("format");
+      let format;
+
+      // Get video info
+      const info = await ytdl.getInfo(videoId);
       
-      const decodedUrl = decodeURIComponent(encodedUrl);
-      console.log(`Proxying request to: ${decodedUrl}`);
+      // If format specified, find that specific format
+      if (formatId) {
+        format = info.formats.find(f => f.itag.toString() === formatId);
+        if (!format) {
+          return new Response(
+            JSON.stringify({ error: `Format with itag ${formatId} not found` }),
+            { status: 404, headers: new Headers({ "Content-Type": "application/json" }) }
+          );
+        }
+      } else {
+        // Otherwise choose the best format (with both audio and video if possible)
+        format = ytdl.chooseFormat(info.formats, { quality: 'highest' });
+      }
       
-      const proxyResponse = await fetch(decodedUrl);
-      const proxyHeaders = new Headers(proxyResponse.headers);
-      proxyHeaders.set("Access-Control-Allow-Origin", "*");
-      
-      return new Response(proxyResponse.body, {
-        status: proxyResponse.status,
-        headers: proxyHeaders
-      });
+      if (!format || !format.url) {
+        return new Response(
+          JSON.stringify({ error: "No valid format found for this video" }),
+          { status: 404, headers: new Headers({ "Content-Type": "application/json" }) }
+        );
+      }
+
+      // Redirect to the actual stream URL
+      return Response.redirect(format.url, 302);
     } catch (error) {
-      console.error("Error proxying stream:", error);
+      console.error("Error streaming video:", error);
       return new Response(
-        JSON.stringify({ error: "Failed to proxy stream", message: error.message }),
-        { status: 500, headers }
+        JSON.stringify({ error: "Failed to process stream", message: error.message }),
+        { status: 500, headers: new Headers({ "Content-Type": "application/json" }) }
       );
     }
   }
   
-  // Handle root path
+  // Handle format-specific streaming endpoint
+  if (path.startsWith("/format/")) {
+    try {
+      const parts = path.split("/format/")[1].split("/");
+      if (parts.length !== 2) {
+        return new Response(
+          JSON.stringify({ error: "Invalid format URL. Use /format/{videoId}/{formatId}" }),
+          { status: 400, headers: new Headers({ "Content-Type": "application/json" }) }
+        );
+      }
+      
+      const [videoId, formatId] = parts;
+      
+      // Get video info
+      const info = await ytdl.getInfo(videoId);
+      
+      // Find the requested format
+      const format = info.formats.find(f => f.itag.toString() === formatId);
+      
+      if (!format || !format.url) {
+        return new Response(
+          JSON.stringify({ error: `Format with itag ${formatId} not found` }),
+          { status: 404, headers: new Headers({ "Content-Type": "application/json" }) }
+        );
+      }
+
+      // Redirect to the actual stream URL
+      return Response.redirect(format.url, 302);
+    } catch (error) {
+      console.error("Error processing format stream:", error);
+      return new Response(
+        JSON.stringify({ error: "Failed to process stream", message: error.message }),
+        { status: 500, headers: new Headers({ "Content-Type": "application/json" }) }
+      );
+    }
+  }
+  
+  // Handle audio-only streaming endpoint
+  if (path.startsWith("/audio/")) {
+    try {
+      const videoId = path.split("/audio/")[1];
+      
+      if (!videoId) {
+        return new Response(
+          JSON.stringify({ error: "Video ID is required" }),
+          { status: 400, headers: new Headers({ "Content-Type": "application/json" }) }
+        );
+      }
+
+      // Get video info
+      const info = await ytdl.getInfo(videoId);
+      
+      // Filter for audio-only formats and choose the best quality
+      const audioFormats = ytdl.filterFormats(info.formats, 'audioonly');
+      if (!audioFormats || audioFormats.length === 0) {
+        return new Response(
+          JSON.stringify({ error: "No audio format found for this video" }),
+          { status: 404, headers: new Headers({ "Content-Type": "application/json" }) }
+        );
+      }
+      
+      // Sort by audio quality and bitrate
+      const bestAudio = audioFormats.sort((a, b) => {
+        const qualityRank = { high: 3, medium: 2, low: 1, AUDIO_QUALITY_LOW: 1, AUDIO_QUALITY_MEDIUM: 2, AUDIO_QUALITY_HIGH: 3 };
+        const aQuality = qualityRank[a.audioQuality] || 0;
+        const bQuality = qualityRank[b.audioQuality] || 0;
+        
+        if (aQuality !== bQuality) return bQuality - aQuality;
+        return (b.bitrate || 0) - (a.bitrate || 0);
+      })[0];
+
+      // Redirect to the audio URL
+      return Response.redirect(bestAudio.url, 302);
+    } catch (error) {
+      console.error("Error processing audio stream:", error);
+      return new Response(
+        JSON.stringify({ error: "Failed to process audio stream", message: error.message }),
+        { status: 500, headers: new Headers({ "Content-Type": "application/json" }) }
+      );
+    }
+  }
+  
+  // Handle root path - API documentation
   if (path === "/") {
     return new Response(
       JSON.stringify({
         status: "ok",
         endpoints: {
-          videoData: "/id/:videoId",
-          streamProxy: "/proxy/:encodedUrl"
+          videoInfo: "/id/:videoId",
+          streamVideo: "/stream/:videoId?format=:formatId", 
+          streamFormat: "/format/:videoId/:formatId",
+          streamAudio: "/audio/:videoId"
         },
-        message: "YouTube InnerTube API is running"
+        message: "YouTube Streaming API is running (@distube/ytdl-core)"
       }),
       { headers }
     );
@@ -168,5 +239,5 @@ async function handleRequest(request: Request): Promise<Response> {
   );
 }
 
-console.log("YouTube InnerTube API server starting...");
+console.log("YouTube API server starting with @distube/ytdl-core...");
 serve(handleRequest);
