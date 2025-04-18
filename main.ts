@@ -1,7 +1,9 @@
 // main.ts - Main entry point for Deno Deploy
 
 import { serve } from "https://deno.land/std@0.204.0/http/server.ts";
-import { InnerTube } from "npm:innertube.js";
+
+// Fix the import to match the actual export format of innertube.js
+import InnerTube from "npm:innertube.js";
 
 const yt = new InnerTube();
 
