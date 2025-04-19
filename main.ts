@@ -1,4 +1,3 @@
-// deno-deploy-youtube-api.ts
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 
 const REFERER_YOUTUBE = 'https://www.youtube.com/';
@@ -129,8 +128,9 @@ async function handler(req: Request): Promise<Response> {
     }
   } 
   // Handle the /proxy endpoint
-  else if (pathname.startsWith('/proxy')) {
-    const streamUrl = url.searchParams.get('url');
+  else if (pathname.startsWith('/proxy/')) {
+    // Extract the stream URL directly from the path
+    const streamUrl = pathname.substring(7); // Remove '/proxy/' prefix
     
     if (!streamUrl) {
       return new Response(JSON.stringify({ error: 'Stream URL is required' }), {
@@ -143,7 +143,10 @@ async function handler(req: Request): Promise<Response> {
     }
 
     try {
-      const response = await fetch(decodeURIComponent(streamUrl), {
+      // Reconstruct the full URL by combining the extracted path with the original query string
+      const fullStreamUrl = streamUrl + (url.search || '');
+      
+      const response = await fetch(decodeURIComponent(fullStreamUrl), {
         headers: {
           'User-Agent': USER_AGENT_ANDROID,
           'Referer': REFERER_YOUTUBE
