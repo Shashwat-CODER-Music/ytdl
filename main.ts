@@ -2,7 +2,6 @@ import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 
 const REFERER_YOUTUBE = 'https://www.youtube.com/';
 const USER_AGENT_ANDROID = 'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/65.0.3325.181 Mobile Safari/537.36';
-const BASE_URL = 'https://shashwat-co-ytdl-42.deno.dev';
 
 class InnerTube {
   baseUrl: string;
@@ -230,7 +229,16 @@ function transformResponse(playerInfo: any, videoId: string, baseUrl: string): a
   };
 }
 
+// Function to get base URL from request
+function getBaseUrl(req: Request): string {
+  const url = new URL(req.url);
+  return `${url.protocol}//${url.host}`;
+}
+
 async function handler(req: Request): Promise<Response> {
+  // Get base URL from the request
+  const baseUrl = getBaseUrl(req);
+  
   // CORS headers
   const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
@@ -268,7 +276,7 @@ async function handler(req: Request): Promise<Response> {
       const playerInfo = await yt.player({ videoId });
       
       // Transform the response to desired format
-      const transformedData = transformResponse(playerInfo, videoId, BASE_URL);
+      const transformedData = transformResponse(playerInfo, videoId, baseUrl);
 
       return new Response(JSON.stringify(transformedData), {
         status: 200,
