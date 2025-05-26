@@ -1,35 +1,38 @@
-// proxy_youtube.ts
+// proxy.ts
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 
-console.log("Proxy server running on http://localhost:8000");
+const TARGET = "https://www.youtube.com";
+
+console.log("Proxying to YouTube on http://localhost:8000");
 
 serve(async (req: Request) => {
+  const { method, headers } = req;
   const url = new URL(req.url);
-  const targetUrl = new URL(`https://www.youtube.com${url.pathname}${url.search}`);
+  const targetUrl = TARGET + url.pathname + url.search;
 
-  const headers = new Headers(req.headers);
-  headers.set("host", "www.youtube.com");
-  headers.set("origin", "https://www.youtube.com");
+  // Recreate the request to forward to YouTube
+  const proxyRequest = new Request(targetUrl, {
+    method,
+    headers,
+    body: method !== "GET" && method !== "HEAD" ? req.body : null,
+  });
 
   try {
-    const response = await fetch(targetUrl.href, {
-      method: req.method,
-      headers,
-      body: req.method !== "GET" && req.method !== "HEAD" ? req.body : null,
-    });
+    const response = await fetch(proxyRequest);
 
-    const resHeaders = new Headers(response.headers);
-    // Remove or adjust headers that may cause issues
-    resHeaders.delete("content-security-policy");
-    resHeaders.set("access-control-allow-origin", "*");
+    // Clone response and modify headers
+    const newHeaders = new Headers(response.headers);
+    newHeaders.set("access-control-allow-origin", "*");
+    newHeaders.delete("content-security-policy");
+    newHeaders.delete("x-frame-options");
 
     return new Response(response.body, {
       status: response.status,
-      headers: resHeaders,
+      headers: newHeaders,
     });
   } catch (err) {
-    console.error("Fetch error:", err);
-    return new Response("Proxy Error", { status: 500 });
+    console.error("Proxy error:", err);
+    return new Response("Error fetching from target", { status: 502 });
   }
 });
